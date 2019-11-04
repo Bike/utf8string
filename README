@@ -20,7 +20,7 @@ Random access is linear time -it basically iterates through all previous charact
 
 Replacing a character in a string with a character of a different size will be very bad for performance, because it has to allocate a new byte vector and shuffle everything around. Most of the optimizations to be done revolve around doing this as little as possible: for example FILL is written to calculate the needed space ahead of time, do the adjustment, and then fill, rather than adjusting anew for each character.
 
-TODO: Optimize. Write out the functions that are using default implementations now if it would help. And adjust-sequence.
+TODO: Optimize. Write out the functions that are using default implementations now if it would help.
 
 BUGS:
 

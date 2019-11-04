@@ -33,12 +33,18 @@
        (serious-condition () "<invalid>"))
      stream)))
 
+;;; NOTE: Several places make arrays initialized to zero
+;;; even when this is not obviously necessary; however
+;;; explicit initialization ensures that the array is a valid
+;;; UTF-8 string (of NULs).
+
 (defun %make-utf8-string (length
                           &optional (data
                                      (make-array
                                       length
                                       :element-type
-                                      '(unsigned-byte 8))))
+                                      '(unsigned-byte 8)
+                                      :initial-element 0)))
   (make-instance 'utf8-string :length length :data data))
 
 ;;; These functions determine what role the given byte
@@ -179,11 +185,12 @@
 
 ;;; Make a new data vector based on an old one.
 ;;; Bytes before END are copied into the new one.
-;;; Then LEN bytes of space are allocated and uninitialized.
+;;; Then LEN bytes of space are set to #\Nul.
 ;;; Then the space between start2 and end2 is copied in.
 (defun expand-data (data end len start2 end2)
   (let ((result (make-array (+ end len (- end2 start2))
-                            :element-type '(unsigned-byte 8))))
+                            :element-type '(unsigned-byte 8)
+                            :initial-element 0)))
     (replace result data :end1 end :end2 end)
     (replace result data :start1 (+ end len)
                          :start2 start2 :end2 end2)
@@ -221,8 +228,9 @@
         repeat index
         finally (return r)))
 
-;; Given a data vector and a codepoint, fill the vector with
-;; that codepoint. It's assumed to be the correct length.
+;;; Given a data vector and a codepoint, fill the vector with
+;;; that codepoint. It's assumed to be the correct length.
+;;; Return the data vector.
 (defun fill-vec-with-codepoint (data codepoint
                                 &optional (start-byte 0)
                                   (end-byte (length data)))
@@ -257,6 +265,8 @@
         (t (error "BUG: Codepoint #x~x out of range" codepoint)))
   data)
 
+;;; Like the above but with a character.
+;;; Return the data vector.
 (defun fill-vec-with-char (data char
                            &optional (start-byte 0)
                              (end-byte (length data)))
@@ -266,6 +276,7 @@
 ;;; Given a data vector and an svector of characters, replace the
 ;;; data with the vector (beginning at index START).
 ;;; Assumes correct length.
+;;; Returns the vector.
 (defun replace-vec-with-charv (data string
                                &optional (start 0)
                                  (start-byte 0)
@@ -277,10 +288,11 @@
         until (= byte-index end-byte)
         do (let ((char (aref string string-index)))
              (set-char char data byte-index)
-             (incf byte-index (char-length char)))))
+             (incf byte-index (char-length char))))
+  data)
 
 ;;; Like the above, but with data vectors, so the bytes are just
-;;; copied directly.0
+;;; copied directly.
 (defun replace-vec-with-vec (data data2
                              &optional (start-byte2 0)
                                (start-byte 0)
@@ -295,6 +307,31 @@
   (length (utf8-string-data sequence)))
 (defmethod sequence-nbytes ((sequence sequence))
   (reduce #'+ sequence :key #'char-length))
+
+(defun make-utf8-string-data (length)
+  (make-array length :element-type '(unsigned-byte 8)
+              :initial-element 0))
+
+(defun make-utf8-string-data/initial-element (length initial-element)
+  (let ((char-length (char-length initial-element)))
+    (if (= char-length 1)
+        (make-array length
+                    :element-type '(unsigned-byte 8)
+                    :initial-element (char-code initial-element))
+        (let ((data (make-array (* length char-length)
+                                :element-type '(unsigned-byte 8))))
+          (fill-vec-with-char data initial-element)))))
+
+(defun make-utf8-string-data/initial-contents (initial-contents)
+  (if (typep initial-contents 'utf8-string)
+      ;; Special case: just copy
+      (copy-seq (utf8-string-data initial-contents))
+      ;; Normal case: Slow
+      (let* ((vec-length (sequence-nbytes initial-contents))
+             (data (make-array vec-length
+                               :element-type
+                               '(unsigned-byte 8))))
+        (replace-vec-with-charv data initial-contents))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
@@ -312,37 +349,77 @@
 (defmethod sequence:make-sequence-like
     ((sequence utf8-string) length
      &key (initial-element nil iep) (initial-contents nil icp))
+  (%make-utf8-string
+   length
+   (cond ((and iep icp)
+          (error "supplied both ~s and ~s to ~s"
+                 :initial-element :initial-contents
+                 'sequence:make-sequence-like))
+         (iep
+          (make-utf8-string-data/initial-element
+           length initial-element))
+         (icp
+          (unless (= length (length initial-contents))
+            (error "length mismatch in ~s" 'sequence:make-sequence-like))
+          (make-utf8-string-data/initial-contents initial-contents))
+         (t (make-utf8-string-data length)))))
+
+;;; All utf8-strings are "actually adjustable", since the data vector
+;;; is indirected. That is, this function always returns its first arg.
+(defmethod sequence:adjust-sequence
+    ((sequence utf8-string) length
+     &key (initial-element nil iep) (initial-contents nil icp))
   (cond ((and iep icp)
          (error "supplied both ~s and ~s to ~s"
                 :initial-element :initial-contents
-                'sequence:make-sequence-like))
+                'sequence:adjust-sequence))
         (iep
-         (let ((char-length (char-length initial-element)))
-           (if (= char-length 1)
-               (%make-utf8-string length
-                                  (make-array length
-                                              :element-type '(unsigned-byte 8)
-                                              :initial-element (char-code initial-element)))
-               (let ((data (make-array (* length char-length)
-                                       :element-type '(unsigned-byte 8))))
-                 (prog1 (%make-utf8-string length data)
-                   (fill-vec-with-char data initial-element))))))
+         (let ((new-len (* (char-length initial-element) length))
+               (data (utf8-string-data sequence)))
+           (if (= new-len (length data))
+               ;; No adjustment necessary: Just write it in
+               (fill-vec-with-char data initial-element)
+               ;; Make and install a new vector
+               (let ((new-data
+                       (make-array new-len
+                                   :element-type '(unsigned-byte 8))))
+                 (setf (utf8-string-data sequence)
+                       (fill-vec-with-char new-data initial-element))))))
         (icp
-         (if (typep initial-contents 'utf8-string)
-             ;; Special case: just copy
-             (%make-utf8-string
-              (utf8-string-length initial-contents)
-              (copy-seq (utf8-string-data initial-contents)))
-             ;; Normal case: Slow
-             (let* ((vec-length (sequence-nbytes initial-contents))
-                    (data (make-array vec-length
-                                      :element-type
-                                      '(unsigned-byte 8))))
-               (replace-vec-with-charv data initial-contents)
-               (%make-utf8-string length data))))
-        (t (%make-utf8-string length))))
-
-;; adjust-sequence
+         (let ((new-len (sequence-nbytes initial-contents))
+               (data (utf8-string-data sequence)))
+           (if (= new-len (length data))
+               ;; No adjustment necessary
+               (if (typep initial-contents 'utf8-string)
+                   (replace-vec-with-vec
+                    data (utf8-string-data initial-contents))
+                   (replace-vec-with-charv data initial-contents))
+               ;; Reallocate
+               (let ((data (make-array new-len
+                                       :element-type '(unsigned-byte 8))))
+                 (setf (utf8-string-data sequence)
+                       (if (typep initial-contents 'utf8-string)
+                           (replace-vec-with-vec
+                            data (utf8-string-data initial-contents))
+                           (replace-vec-with-charv
+                            data initial-contents)))))))
+        (t
+         (let ((old-length (utf8-string-length sequence))
+               (data (utf8-string-data sequence)))
+           (cond ((> length old-length)
+                  ;; Make a new data array
+                  ;; with the extra space NULd out.
+                  (setf (utf8-string-data sequence)
+                        (adjust-array data (+ (length data)
+                                              (- length old-length))
+                                      :initial-element 0)))
+                 ((< length old-length)
+                  ;; Make a new data array
+                  ;; preserving only the first LENGTH characters.
+                  (setf (utf8-string-data sequence)
+                        (adjust-array data (char-index data length))))))))
+  (setf (utf8-string-length sequence) length)
+  sequence)
 
 ;;; make-sequence-iterator uses default implementation
 ;;; (i.e., make-simple-sequence-iterator)
