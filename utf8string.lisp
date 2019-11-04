@@ -532,25 +532,28 @@
 
 ;;; Make a sequence of the correct byte length
 ;;; so we don't have to resize
-#+(or)
 (defmethod sequence:concatenate ((proto utf8-string)
                                  &rest sequences)
   (let* ((lengths (mapcar #'length sequences))
-         (byte-length (reduce #'+ sequences
-                              :key #'sequence-nbytes))
+         (byte-lengths (mapcar #'sequence-nbytes sequences))
+         (byte-length (reduce #'+ byte-lengths))
          (data (make-array byte-length
                            :element-type '(unsigned-byte 8)))
          (result (%make-utf8-string (reduce #'+ lengths) data)))
-    (format t "byte-length before: ~d~%" byte-length)
-    (loop with index = 0
+    (loop with byte-index = 0
+          for byte-length in byte-lengths
           for sequence in sequences
-          for length in lengths
-          do (replace result sequence :start1 index)
-             (incf index length))
-    (format t "byte-length after: ~d~%" (sequence-nbytes result))
+          if (typep sequence 'utf8-string)
+            do (replace-vec-with-vec
+                data (utf8-string-data sequence)
+                0 byte-index (+ byte-index byte-length))
+          else
+            do (replace-vec-with-charv
+                data sequence
+                0 byte-index (+ byte-index byte-length))
+          do (incf byte-index byte-length))
     result))
 
-;; concatenate will be fucky
 ;; reduce, mismatch, search is ok with default implementation
 ;; delete will be fucky
 ;; remove will be fucky but maybe less??
