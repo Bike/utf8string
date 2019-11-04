@@ -298,57 +298,75 @@
 
 ;; adjust-sequence
 
-;; make-sequence-iterator uses default implementation
-;; (i.e., make-simple-sequence-iterator)
+;;; make-sequence-iterator uses default implementation
+;;; (i.e., make-simple-sequence-iterator)
 
-;;; FIXME: This does not work. By setting iterator-element
-;;; while iterating, the vector can be resized, which will
-;;; alter the iterator endpoint.
+;;; Iterators are a cons of the character index with the
+;;; byte index. Both are necessary due to possible resizing.
+;;; The endpoint is just the character index.
+(defmacro iterator-char-index (it) `(car ,it))
+(defmacro iterator-byte-index (it) `(cdr ,it))
 (defmethod sequence:make-simple-sequence-iterator
     ((sequence utf8-string) &key from-end (start 0) end)
   (when (null end) (setf end (length sequence)))
   (let ((data (utf8-string-data sequence)))
     (if from-end
         ;; FIXME: Probably broken at the edges
-        (values (char-index data (1- end))
-                (char-index data (1- start))
+        (values (cons (1- end) (char-index data (1- end)))
+                (1- start)
                 t)
-        (values (char-index data start)
-                (char-index data end)
+        (values (cons start (char-index data start))
+                end
                 nil))))
 
 (defmethod sequence:iterator-step
     ((sequence utf8-string) iterator from-end)
   (let ((data (utf8-string-data sequence)))
     (if from-end
-        (prev-index data iterator)
-        (next-index data iterator))))
+        (setf (iterator-char-index iterator)
+              (1- (iterator-char-index iterator))
+              (iterator-byte-index iterator)
+              (prev-index data (iterator-byte-index iterator)))
+        (setf (iterator-char-index iterator)
+              (1+ (iterator-char-index iterator))
+              (iterator-byte-index iterator)
+              (next-index data (iterator-byte-index iterator)))))
+  iterator)
 
-;; iterator-endp is fine with default (= iterator limit)
+(defmethod sequence:iterator-endp
+    ((sequence utf8-string) iterator limit from-end)
+  (declare (ignore from-end))
+  (= (iterator-char-index iterator) limit))
 
 (defmethod sequence:iterator-element
     ((sequence utf8-string) iterator)
-  (get-char (utf8-string-data sequence) iterator))
+  (get-char (utf8-string-data sequence)
+            (iterator-byte-index iterator)))
 
 ;;; Also hella slow.
 (defmethod (setf sequence:iterator-element)
     (new (sequence utf8-string) iterator)
   (let* ((data (utf8-string-data sequence))
-         (byte (aref data iterator))
+         (byte-index (iterator-byte-index iterator))
+         (byte (aref data byte-index))
          (old-length (start-byte-length byte))
          (new-length (char-length new)))
     (unless (= old-length new-length)
       ;; Apocalyptically slow case: Resize.
       (setf data
-            (expand-data data iterator new-length
-                         (+ iterator old-length) (length data))
+            (expand-data data byte-index new-length
+                         (+ byte-index old-length) (length data))
             (utf8-string-data sequence)
             data))
     ;; Now write in the codepoint.
-    (set-char new data iterator)))
+    (set-char new data byte-index)))
 
-;;; iterator-index and iterator-copy are fine with defaults
-;;; (i.e. returning the iterator)
+(defmethod sequence:iterator-index ((sequence utf8-string) iterator)
+  (iterator-char-index iterator))
+
+(defmethod sequence:iterator-copy ((sequence utf8-string) iterator)
+  (cons (iterator-char-index iterator)
+        (iterator-byte-index iterator)))
 
 ;;; map, count, find, position are probably fine
 ;;; however, MAP /could/ allocate four bytes per character
