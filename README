@@ -1,0 +1,27 @@
+This library adds UTF-8 encoded strings as a sequence type in Common Lisp. To use this library, your implementation must support the sequences extension (http://www.doc.gold.ac.uk/~mas01cr/papers/ilc2007/sequences-20070301.pdf). Additionally, `code-char` and `char-code` must use Unicode codepoints, but that restriction could be changed if necessary. I'm sure as fuck not dealing with parsing UnicodeData.txt or whatever though.
+
+USAGE: Too simple to require a manual:
+
+Load (or compile and load, or whatever) utf8string.lisp. Now utf8:utf8-string is a class available for use. It's a subtype of SEQUENCE, so you can for example `(coerce "hello world" 'utf8:utf8-string)`, as well as use elt, map, fill, replace, make-sequence, copy-seq, etc. functions in the standard. No other symbols are exported from the package at this time. There is no literal syntax.
+
+MOTIVATION:
+
+Because in Lisp strings are arrays, implementations have tended to use UTF-32 encoding if they want to support Unicode, I say without explicit support. UTF-32 allows constant time access and stuff, as one would expect from an array. However this means a lot of wasted space (i.e. null bytes) unless your strings are full of characters that actually use those high bytes, such as extended CJK ideographs or well actually it looks like that's literally all of it right now.
+
+UTF-8 encoded strings are much more compact for strings not mostly composed of these characters. The disadvantage is that random access is more of a pain, because to know what byte the nth character starts at you need to know the lengths of all the previous characters. However it's possible that this isn't the usual way to use strings, and instead they're usually just iterated over, which doesn't take much more time in UTF-8 than it does in UTF-32.
+
+As such, the priority here is size in memory, over speed. A utf8-string object should basically take up as many bytes as the UTF-8 representation of the given string takes, plus some constant overhead. That's the motivation. pfdietz mentioned it offhand and I rolled with it to escape the waves.
+
+PERFORMANCE:
+
+I haven't tested shit. Frankly I'm surprised it even runs. I have not really done any optimization.
+
+Random access is linear time -it basically iterates through all previous characters. Iteration is also linear time (like usual). Unfortunately beginning an iteration conses (one cons).
+
+Replacing a character in a string with a character of a different size will be very bad for performance, because it has to allocate a new byte vector and shuffle everything around. Most of the optimizations to be done revolve around doing this as little as possible: for example FILL is written to calculate the needed space ahead of time, do the adjustment, and then fill, rather than adjusting anew for each character.
+
+TODO: Optimize. Write out the functions that are using default implementations now if it would help. And adjust-sequence.
+
+BUGS:
+
+`:from-end` is probably busted. It's kind of ridiculous, you know? But I can fix it later. Also for a while ö became Þ for some fucking reason but that's fixed now (the reason was I wrote in the wrong constant).
