@@ -7,9 +7,6 @@
 (deftype data () '(simple-array (unsigned-byte 8) (*)))
 (deftype index () `(integer 0 (,(1- array-dimension-limit))))
 
-(defun required-slot ()
-  (error "BUG: Tried to make a utf8-string with missing slot"))
-
 (defclass utf8-string (sequence standard-object)
   ((%length :accessor utf8-string-length :initarg :length
             :reader sequence:length
