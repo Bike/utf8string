@@ -222,17 +222,18 @@
     ;; Now write in the codepoint.
     (set-char new data byte-index)))
 
-;; Given the index of a character, return an index into the
-;; underlying data (provided). This basically has to iterate
-;; through the sequence, so it's linear time probably.
-;; If passed the length of the string, returns the length of
-;; the data.
-;; FIXME: We sometimes do this twice for a start and end,
-;; in which case we coudl start the second iteration later
-;; and save a bit of time.
-(defun char-index (data index)
-  (loop for r = 0 then (next-index data r)
-        repeat index
+;;; Given the index of a character, return an index into the
+;;; underlying data (provided). This basically has to iterate
+;;; through the sequence, so it's linear time probably.
+;;; If passed the length of the string, returns the length of
+;;; the data.
+;;; The optional parameters are a character index and
+;;; corresponding byte index; this can be used to start the
+;;; iteration a bit later in the string and save time.
+(defun char-index (data index
+                   &optional (start-char 0) (start-byte 0))
+  (loop for r = start-byte then (next-index data r)
+        repeat (- index start-char)
         finally (return r)))
 
 ;;; Given a data vector and a codepoint, fill the vector with
@@ -548,7 +549,9 @@
         (data (utf8-string-data sequence)))
     (%make-utf8-string
      (- end start)
-     (subseq data (char-index data start) (char-index data end)))))
+     (let ((start-byte (char-index data start)))
+       (subseq data start-byte
+               (char-index data end start start-byte))))))
 
 ;; Default method (that is, (subseq seq 0)) would work,
 ;; but this is even easier and doesn't iterate
@@ -564,7 +567,7 @@
   (when (null end) (setf end (utf8-string-length sequence)))
   (let* ((data (utf8-string-data sequence))
          (start-byte (char-index data start))
-         (end-byte (char-index data end))
+         (end-byte (char-index data end start start-byte))
          (new-char-length (char-length item))
          (new-area-len (* (- end start) new-char-length)))
     (unless (= new-area-len (- end-byte start-byte))
@@ -591,7 +594,7 @@
           ((< len2 len1) (setf end1 (+ start1 len2)))))
   (let* ((data (utf8-string-data s1))
          (start-byte (char-index data start1))
-         (end-byte (char-index data end1))
+         (end-byte (char-index data end1 start1 start-byte))
          ;; How many bytes do we need for these characters?
          (required-area-len (reduce #'+ s2
                                     :start start2 :end end2
@@ -621,10 +624,10 @@
           ((< len2 len1) (setf end1 (+ start1 len2)))))
   (let* ((data1 (utf8-string-data s1))
          (start-byte1 (char-index data1 start1))
-         (end-byte1 (char-index data1 end1))
+         (end-byte1 (char-index data1 end1 start1 start-byte1))
          (data2 (utf8-string-data s2))
          (start-byte2 (char-index data2 start2))
-         (end-byte2 (char-index data2 end2))
+         (end-byte2 (char-index data2 end2 start2 start-byte2))
          (new-len (- end-byte2 start-byte2)))
     (unless (= new-len (- end-byte1 start-byte1))
       (setf data1
