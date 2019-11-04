@@ -60,13 +60,22 @@
   (declare (type (unsigned-byte 8) byte))
   (= (ldb (byte 2 6) byte) #b10))
 
+;;; Given a start byte, how many bytes is the codepoint?
+(defun start-byte-length (byte)
+  (declare (type (unsigned-byte 8) byte))
+  (cond ((byte-1-start-p byte) 1)
+        ((byte-2-start-p byte) 2)
+        ((byte-3-start-p byte) 3)
+        ((byte-4-start-p byte) 4)
+        (t (error "Invalid start byte #x~x" byte))))
+
 (defun codepoint-length (codepoint)
   (declare (type (and fixnum (integer 0)) codepoint))
   (cond ((< codepoint #x80) 1)
         ((< codepoint #x800) 2)
         ((< codepoint #x10000) 3)
         ((< codepoint #x110000) 4)
-        (t (error "BUG: Codepoint ~x out of range" codepoint))))
+        (t (error "BUG: Codepoint #x~x out of range" codepoint))))
 
 (defun char-length (char)
   (codepoint-length (char-code char)))
@@ -76,13 +85,7 @@
 ;; Does no bounds checking and mostly assumes valid encoding.
 (defun next-index (data index)
   (declare (type data data) (type index index))
-  (let ((item (aref data index)))
-    (cond
-      ((byte-1-start-p item) (1+ index))
-      ((byte-2-start-p item) (+ index 2))
-      ((byte-3-start-p item) (+ index 3))
-      ((byte-4-start-p item) (+ index 4))
-      (t (error "Invalid encoding at position ~d" index)))))
+  (+ index (start-byte-length (aref data index))))
 
 ;; Like the above but backwards.
 ;; If the provided index is zero, returns -1.
@@ -131,6 +134,44 @@
 (defun get-char (data index)
   (code-char (get-codepoint data index)))
 
+;;; Given a codepoint, data, and an underlying index into it,
+;;; write the codepoint into the data at that position.
+;;; No bounds checks, may overwrite with impunity.
+;;; Return value undefined.
+(defun set-codepoint (codepoint data index)
+  (declare (type data data) (type index index))
+  (cond ((< codepoint #x80) ; one byte
+         (setf (aref data index) codepoint))
+        ((< codepoint #x800) ; two bytes
+         (let ((byte0 (logior #xc0 (ldb (byte 5 6) codepoint)))
+               (byte1 (logior #xc8 (ldb (byte 6 0) codepoint))))
+           (setf (aref data      index) byte0
+                 (aref data (1+ index)) byte1)))
+        ((< codepoint #x10000) ; three byte
+         (let ((byte0 (logior #xe0 (ldb (byte 4 12) codepoint)))
+               (byte1 (logior #x80 (ldb (byte 6  6) codepoint)))
+               (byte2 (logior #x80 (ldb (byte 6  0) codepoint))))
+           (setf (aref data       index) byte0
+                 (aref data  (1+ index)) byte1
+                 (aref data (+ index 2)) byte2)))
+        ((< codepoint #x11000) ; four byte
+         (let ((byte0 (logior #xf0 (ldb (byte 3 18) codepoint)))
+               (byte1 (logior #x80 (ldb (byte 6 12) codepoint)))
+               (byte2 (logior #x80 (ldb (byte 6  6) codepoint)))
+               (byte3 (logior #x80 (ldb (byte 6  0) codepoint))))
+           (setf (aref data       index) byte0
+                 (aref data  (1+ index)) byte1
+                 (aref data (+ index 2)) byte2
+                 (aref data (+ index 3)) byte3)))
+        (t (error "BUG: Codepoint #x~x out of range" codepoint))))
+
+;;; Given a character, data, and an underlying index into it,
+;;; set the character at that position. No bounds checks.
+;;; Returns the character.
+(defun set-char (character data index)
+  (set-codepoint (char-code character) data index)
+  character)
+
 ;; Given the index of a character, return an index into the
 ;; underlying data (provided). This basically has to iterate
 ;; through the sequence, so it's linear time probably.
@@ -175,17 +216,51 @@
                           (aref data  (1+ i)) byte1
                           (aref data (+ i 2)) byte2
                           (aref data (+ i 3)) byte3))))
-        (t (error "BUG: Codepoint ~x out of range" codepoint)))
+        (t (error "BUG: Codepoint #x~x out of range" codepoint)))
   data)
 
 (defun fill-vec-with-char (data char)
   (fill-vec-with-codepoint data (char-code char)))
 
+;;; Make a new data vector based on an old one.
+;;; Bytes before END are copied into the new one.
+;;; Then LEN bytes of space are allocated and uninitialized.
+;;; Then the space between start2 and end2 is copied in.
+(defun expand-data (data end len start2 end2)
+  (let ((result (make-array (+ end len (- end2 start2))
+                            :element-type '(unsigned-byte 8))))
+    (replace result data :end1 end :end2 end)
+    (replace result data :start1 (+ end len)
+                         :start2 start2 :end2 end2)
+    result))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Extensible sequences protocol
+;;;
+
 (defmethod sequence:elt ((sequence utf8-string) index)
   (let ((data (utf8-string-data sequence)))
     (get-char data (char-index data index))))
 
-;; (setf elt)
+;;; This can be HELLA SLOW because it needs to allocate
+;;; a new data vector if the new character isn't the same
+;;; size as the old one.
+(defmethod (setf sequence:elt) (new (sequence utf8-string) index)
+  (let* ((data (utf8-string-data sequence))
+         (byte-index (char-index data index))
+         (byte (aref data byte-index))
+         (old-length (start-byte-length byte))
+         (new-length (char-length new)))
+    (unless (= old-length new-length)
+      ;; Apocalyptically slow case: Resize.
+      (setf data
+            (expand-data data byte-index new-length
+                         (+ byte-index old-length) (length data))
+            (utf8-string-data sequence)
+            data))
+    ;; Now write in the codepoint.
+    (set-char new data byte-index)))
 
 (defmethod sequence:make-sequence-like
     ((sequence utf8-string) length
@@ -252,7 +327,23 @@
     ((sequence utf8-string) iterator)
   (get-char (utf8-string-data sequence) iterator))
 
-;; (setf iterator-element) will be fucky.
+;;; Also hella slow.
+(defmethod (setf sequence:iterator-element)
+    (new (sequence utf8-string) iterator)
+  (let* ((data (utf8-string-data sequence))
+         (byte (aref data iterator))
+         (old-length (start-byte-length byte))
+         (new-length (char-length new)))
+    (unless (= old-length new-length)
+      ;; Apocalyptically slow case: Resize.
+      (setf data
+            (expand-data data iterator new-length
+                         (+ iterator old-length) (length data))
+            (utf8-string-data sequence)
+            data))
+    ;; Now write in the codepoint.
+    (set-char new data iterator)))
+
 ;; iterator-index and iterator-copy are fine with defaults
 ;; (i.e. returning the iterator)
 
