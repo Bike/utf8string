@@ -187,7 +187,7 @@
 ;;; Bytes before END are copied into the new one.
 ;;; Then LEN bytes of space are set to #\Nul.
 ;;; Then the space between start2 and end2 is copied in.
-(defun expand-data (data end len start2 end2)
+(defun adjust-data (data end len start2 end2)
   (let ((result (make-array (+ end len (- end2 start2))
                             :element-type '(unsigned-byte 8)
                             :initial-element 0)))
@@ -208,7 +208,7 @@
     (unless (= old-length new-length)
       ;; Apocalyptically slow case: Resize.
       (setf data
-            (expand-data data byte-index new-length
+            (adjust-data data byte-index new-length
                          (+ byte-index old-length) (length data))
             (utf8-string-data sequence)
             data))
@@ -513,7 +513,7 @@
     (unless (= new-area-len (- end-byte start-byte))
       ;; We have to resize the vector (slow path)
       (setf data
-            (expand-data data start-byte new-area-len
+            (adjust-data data start-byte new-area-len
                          end-byte
                          (length data))
             (utf8-string-data sequence) data))
@@ -542,7 +542,7 @@
     (unless (= required-area-len (- end-byte start-byte))
       ;; Resize the data if necessary
       (setf data
-            (expand-data data start-byte required-area-len
+            (adjust-data data start-byte required-area-len
                          end-byte (length data))
             (utf8-string-data s1) data))
     ;; Actually replace
@@ -571,7 +571,7 @@
          (new-len (- end-byte2 start-byte2)))
     (unless (= new-len (- end-byte1 start-byte1))
       (setf data1
-            (expand-data data1 start-byte1 new-len
+            (adjust-data data1 start-byte1 new-len
                          end-byte1 (length data1))
             (utf8-string-data s1) data1))
     (replace-vec-with-vec data1 data2 start-byte2
