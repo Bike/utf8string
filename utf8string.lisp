@@ -16,14 +16,22 @@
 
 (defmethod print-object ((o utf8-string) stream)
   (print-unreadable-object (o stream :type t)
-    (write-char #\" stream)
-    (map nil (lambda (char)
-               (when (or (char= char #\")
-                         (char= char #\\))
-                 (write-char #\\ stream))
-               (write-char char stream))
-         o)
-    (write-char #\" stream)))
+    ;; We do this so that errors while iterating
+    ;; don't result in the entire print failing.
+    (write-string
+     (handler-case
+         ;; Build a string, escaping as you go
+         (with-output-to-string (stream)
+           (write-char #\" stream)
+           (map nil (lambda (char)
+                      (when (or (char= char #\")
+                                (char= char #\\))
+                        (write-char #\\ stream))
+                      (write-char char stream))
+                o)
+           (write-char #\" stream))
+       (serious-condition () "<invalid>"))
+     stream)))
 
 (defun %make-utf8-string (length
                           &optional (data
