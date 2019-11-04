@@ -448,8 +448,13 @@
 (defmethod sequence:replace
     ((s1 utf8-string) (s2 sequence)
      &key (start1 0) end1 (start2 0) end2)
+  ;; Do defaulting
   (when (null end1) (setf end1 (length s1)))
   (when (null end2) (setf end2 (length s2)))
+  ;; Use the smaller sequence length
+  (let ((len1 (- end1 start1)) (len2 (- end2 start2)))
+    (cond ((< len1 len2) (setf end2 (+ start2 len1)))
+          ((< len2 len1) (setf end1 (+ start1 len2)))))
   (let* ((data (utf8-string-data s1))
          (start-byte (char-index data start1))
          (end-byte (char-index data end1))
@@ -473,8 +478,13 @@
 (defmethod sequence:replace
     ((s1 utf8-string) (s2 utf8-string)
      &key (start1 0) end1 (start2 0) end2)
+  ;; Do defaulting
   (when (null end1) (setf end1 (length s1)))
   (when (null end2) (setf end2 (length s2)))
+  ;; Use the smaller sequence length
+  (let ((len1 (- end1 start1)) (len2 (- end2 start2)))
+    (cond ((< len1 len2) (setf end2 (+ start2 len1)))
+          ((< len2 len1) (setf end1 (+ start1 len2)))))
   (let* ((data1 (utf8-string-data s1))
          (start-byte1 (char-index data1 start1))
          (end-byte1 (char-index data1 end1))
