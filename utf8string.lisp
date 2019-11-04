@@ -301,6 +301,9 @@
 ;; make-sequence-iterator uses default implementation
 ;; (i.e., make-simple-sequence-iterator)
 
+;;; FIXME: This does not work. By setting iterator-element
+;;; while iterating, the vector can be resized, which will
+;;; alter the iterator endpoint.
 (defmethod sequence:make-simple-sequence-iterator
     ((sequence utf8-string) &key from-end (start 0) end)
   (when (null end) (setf end (length sequence)))
@@ -344,10 +347,13 @@
     ;; Now write in the codepoint.
     (set-char new data iterator)))
 
-;; iterator-index and iterator-copy are fine with defaults
-;; (i.e. returning the iterator)
+;;; iterator-index and iterator-copy are fine with defaults
+;;; (i.e. returning the iterator)
 
-;; map, count, find, position are probably fine
+;;; map, count, find, position are probably fine
+;;; however, MAP /could/ allocate four bytes per character
+;;; and then shrink at the end; this would save time if
+;;; any character is more than one byte.
 
 ;; Copy the underlying bytes
 (defmethod sequence:subseq
@@ -365,9 +371,9 @@
    (utf8-string-length sequence)
    (copy-seq (utf8-string-data sequence))))
 
-;; fill, (n)substitute, replace will be fucky
+;;; fill, (n)substitute, replace will be fucky
 
-;; the default reverse = nreverse copy-seq is fine
+;;; the default reverse = nreverse copy-seq is fine
 
 ;;; NREVERSE: Reverse the bytes, then iterate over
 ;;; them reversing individual codepoints.
