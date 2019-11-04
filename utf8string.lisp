@@ -144,7 +144,7 @@
          (setf (aref data index) codepoint))
         ((< codepoint #x800) ; two bytes
          (let ((byte0 (logior #xc0 (ldb (byte 5 6) codepoint)))
-               (byte1 (logior #xc8 (ldb (byte 6 0) codepoint))))
+               (byte1 (logior #x80 (ldb (byte 6 0) codepoint))))
            (setf (aref data      index) byte0
                  (aref data (1+ index)) byte1)))
         ((< codepoint #x10000) ; three byte
@@ -258,6 +258,14 @@
   (fill-vec-with-codepoint data (char-code char)
                            start-byte end-byte))
 
+;;; Given a vector of characters, return the number
+;;; of UTF-8 bytes required to represent it.
+(defgeneric sequence-nbytes (sequence))
+(defmethod sequence-nbytes ((sequence utf8-string))
+  (length (utf8-string-data sequence)))
+(defmethod sequence-nbytes ((sequence sequence))
+  (reduce #'+ sequence :key #'char-length))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
 ;;; Extensible sequences protocol
@@ -296,8 +304,7 @@
               (utf8-string-length initial-contents)
               (copy-seq (utf8-string-data initial-contents)))
              ;; Normal case: Slow
-             (let* ((vec-length (reduce #'+ initial-contents
-                                        :key #'char-length))
+             (let* ((vec-length (sequence-nbytes initial-contents))
                     (data (make-array vec-length
                                       :element-type
                                       '(unsigned-byte 8))))
@@ -435,6 +442,26 @@
         (fix-nreverse-data
          (nreverse (utf8-string-data sequence))))
   sequence)
+
+;;; Make a sequence of the correct byte length
+;;; so we don't have to resize
+#+(or)
+(defmethod sequence:concatenate ((proto utf8-string)
+                                 &rest sequences)
+  (let* ((lengths (mapcar #'length sequences))
+         (byte-length (reduce #'+ sequences
+                              :key #'sequence-nbytes))
+         (data (make-array byte-length
+                           :element-type '(unsigned-byte 8)))
+         (result (%make-utf8-string (reduce #'+ lengths) data)))
+    (format t "byte-length before: ~d~%" byte-length)
+    (loop with index = 0
+          for sequence in sequences
+          for length in lengths
+          do (replace result sequence :start1 index)
+             (incf index length))
+    (format t "byte-length after: ~d~%" (sequence-nbytes result))
+    result))
 
 ;; concatenate will be fucky
 ;; reduce, mismatch, search is ok with default implementation
