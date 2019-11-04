@@ -218,22 +218,24 @@
 
 ;; Given a data vector and a codepoint, fill the vector with
 ;; that codepoint. It's assumed to be the correct length.
-(defun fill-vec-with-codepoint (data codepoint)
+(defun fill-vec-with-codepoint (data codepoint
+                                &optional (start-byte 0)
+                                  (end-byte (length data)))
   (declare (type data data)
            (type (and fixnum (integer 0)) codepoint))
   (cond ((< codepoint #x80) ; one byte
-         (fill data codepoint))
+         (fill data codepoint :start start-byte :end end-byte))
         ((< codepoint #x800) ; two byte
          (let ((byte0 (logior #xc0 (ldb (byte 5 6) codepoint)))
                (byte1 (logior #x80 (ldb (byte 6 0) codepoint))))
-           (loop for i below (length data) by 2
+           (loop for i from start-byte below end-byte by 2
                  do (setf (aref data      i) byte0
                           (aref data (1+ i)) byte1))))
         ((< codepoint #x10000) ; three byte
          (let ((byte0 (logior #xe0 (ldb (byte 4 12) codepoint)))
                (byte1 (logior #x80 (ldb (byte 6  6) codepoint)))
                (byte2 (logior #x80 (ldb (byte 6  0) codepoint))))
-           (loop for i below (length data) by 3
+           (loop for i from start-byte below end-byte by 3
                  do (setf (aref data       i) byte0
                           (aref data  (1+ i)) byte1
                           (aref data (+ i 2)) byte2))))
@@ -242,7 +244,7 @@
                (byte1 (logior #x80 (ldb (byte 6 12) codepoint)))
                (byte2 (logior #x80 (ldb (byte 6  6) codepoint)))
                (byte3 (logior #x80 (ldb (byte 6  0) codepoint))))
-           (loop for i below (length data) by 4
+           (loop for i from start-byte below end-byte by 4
                  do (setf (aref data       i) byte0
                           (aref data  (1+ i)) byte1
                           (aref data (+ i 2)) byte2
@@ -250,8 +252,11 @@
         (t (error "BUG: Codepoint #x~x out of range" codepoint)))
   data)
 
-(defun fill-vec-with-char (data char)
-  (fill-vec-with-codepoint data (char-code char)))
+(defun fill-vec-with-char (data char
+                           &optional (start-byte 0)
+                             (end-byte (length data)))
+  (fill-vec-with-codepoint data (char-code char)
+                           start-byte end-byte))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
@@ -362,7 +367,8 @@
 ;;; map, count, find, position are probably fine
 ;;; however, MAP /could/ allocate four bytes per character
 ;;; and then shrink at the end; this would save time if
-;;; any character is more than one byte.
+;;; any character is more than one byte, but make the all
+;;; one byte case a little slower.
 
 ;; Copy the underlying bytes
 (defmethod sequence:subseq
@@ -380,7 +386,27 @@
    (utf8-string-length sequence)
    (copy-seq (utf8-string-data sequence))))
 
-;;; fill, (n)substitute, replace will be fucky
+;;; While the default method is adequate, we can do better:
+;;; Only resize once, and write the bytes in a tighter loop.
+(defmethod sequence:fill
+    ((sequence utf8-string) item &key (start 0) end)
+  (when (null end) (setf end (utf8-string-length sequence)))
+  (let* ((data (utf8-string-data sequence))
+         (start-byte (char-index data start))
+         (end-byte (char-index data end))
+         (new-char-length (char-length item))
+         (new-area-len (* (- end start) new-char-length)))
+    (unless (= new-area-len (- end-byte start-byte))
+      ;; We have to resize the vector (slow path)
+      (setf data
+            (expand-data data start-byte new-area-len
+                         end-byte
+                         (length data))
+            (utf8-string-data sequence) data))
+    (fill-vec-with-char data item
+                        start-byte (+ start-byte new-area-len)))
+  sequence)
+;;; (n)substitute, replace will be fucky
 
 ;;; the default reverse = nreverse copy-seq is fine
 
