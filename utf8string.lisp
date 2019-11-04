@@ -172,6 +172,37 @@
   (set-codepoint (char-code character) data index)
   character)
 
+;;; Make a new data vector based on an old one.
+;;; Bytes before END are copied into the new one.
+;;; Then LEN bytes of space are allocated and uninitialized.
+;;; Then the space between start2 and end2 is copied in.
+(defun expand-data (data end len start2 end2)
+  (let ((result (make-array (+ end len (- end2 start2))
+                            :element-type '(unsigned-byte 8))))
+    (replace result data :end1 end :end2 end)
+    (replace result data :start1 (+ end len)
+                         :start2 start2 :end2 end2)
+    result))
+
+;;; Like the above, but get the sequence as an argument,
+;;; and resize the data if necessary (i.e. if the new and
+;;; old characters have different lengths).
+;;; Resizing is, of course, hells of slow.
+(defun set-data-char (new sequence byte-index)
+  (let* ((data (utf8-string-data sequence))
+         (byte (aref data byte-index))
+         (old-length (start-byte-length byte))
+         (new-length (char-length new)))
+    (unless (= old-length new-length)
+      ;; Apocalyptically slow case: Resize.
+      (setf data
+            (expand-data data byte-index new-length
+                         (+ byte-index old-length) (length data))
+            (utf8-string-data sequence)
+            data))
+    ;; Now write in the codepoint.
+    (set-char new data byte-index)))
+
 ;; Given the index of a character, return an index into the
 ;; underlying data (provided). This basically has to iterate
 ;; through the sequence, so it's linear time probably.
@@ -222,18 +253,6 @@
 (defun fill-vec-with-char (data char)
   (fill-vec-with-codepoint data (char-code char)))
 
-;;; Make a new data vector based on an old one.
-;;; Bytes before END are copied into the new one.
-;;; Then LEN bytes of space are allocated and uninitialized.
-;;; Then the space between start2 and end2 is copied in.
-(defun expand-data (data end len start2 end2)
-  (let ((result (make-array (+ end len (- end2 start2))
-                            :element-type '(unsigned-byte 8))))
-    (replace result data :end1 end :end2 end)
-    (replace result data :start1 (+ end len)
-                         :start2 start2 :end2 end2)
-    result))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
 ;;; Extensible sequences protocol
@@ -243,24 +262,9 @@
   (let ((data (utf8-string-data sequence)))
     (get-char data (char-index data index))))
 
-;;; This can be HELLA SLOW because it needs to allocate
-;;; a new data vector if the new character isn't the same
-;;; size as the old one.
 (defmethod (setf sequence:elt) (new (sequence utf8-string) index)
-  (let* ((data (utf8-string-data sequence))
-         (byte-index (char-index data index))
-         (byte (aref data byte-index))
-         (old-length (start-byte-length byte))
-         (new-length (char-length new)))
-    (unless (= old-length new-length)
-      ;; Apocalyptically slow case: Resize.
-      (setf data
-            (expand-data data byte-index new-length
-                         (+ byte-index old-length) (length data))
-            (utf8-string-data sequence)
-            data))
-    ;; Now write in the codepoint.
-    (set-char new data byte-index)))
+  (set-data-char new sequence
+                 (char-index (utf8-string-data sequence) index)))
 
 (defmethod sequence:make-sequence-like
     ((sequence utf8-string) length
@@ -346,20 +350,7 @@
 ;;; Also hella slow.
 (defmethod (setf sequence:iterator-element)
     (new (sequence utf8-string) iterator)
-  (let* ((data (utf8-string-data sequence))
-         (byte-index (iterator-byte-index iterator))
-         (byte (aref data byte-index))
-         (old-length (start-byte-length byte))
-         (new-length (char-length new)))
-    (unless (= old-length new-length)
-      ;; Apocalyptically slow case: Resize.
-      (setf data
-            (expand-data data byte-index new-length
-                         (+ byte-index old-length) (length data))
-            (utf8-string-data sequence)
-            data))
-    ;; Now write in the codepoint.
-    (set-char new data byte-index)))
+  (set-data-char new sequence (iterator-byte-index iterator)))
 
 (defmethod sequence:iterator-index ((sequence utf8-string) iterator)
   (iterator-char-index iterator))
