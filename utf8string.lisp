@@ -255,6 +255,31 @@
   (fill-vec-with-codepoint data (char-code char)
                            start-byte end-byte))
 
+;;; Given a data vector and an svector of characters, replace the
+;;; data with the vector (beginning at index START).
+;;; Assumes correct length.
+(defun replace-vec-with-charv (data string
+                               &optional (start 0)
+                                 (start-byte 0)
+                                 (end-byte (length data)))
+  (declare (type (simple-array * (*)) string)
+           (type data data))
+  (loop with byte-index = start-byte
+        for string-index from start
+        until (= byte-index end-byte)
+        do (let ((char (aref string string-index)))
+             (set-char char data byte-index)
+             (incf byte-index (char-length char)))))
+
+;;; Like the above, but with data vectors, so the bytes are just
+;;; copied directly.0
+(defun replace-vec-with-vec (data data2
+                             &optional (start-byte2 0)
+                               (start-byte 0)
+                               (end-byte (length data)))
+  (declare (type data data data2))
+  (replace data data2 :start1 start-byte :end1 end-byte :start2 start-byte2))
+
 ;;; Given a vector of characters, return the number
 ;;; of UTF-8 bytes required to represent it.
 (defgeneric sequence-nbytes (sequence))
@@ -305,8 +330,8 @@
                     (data (make-array vec-length
                                       :element-type
                                       '(unsigned-byte 8))))
-               (replace (%make-utf8-string length data)
-                        initial-contents))))
+               (replace-vec-with-charv data initial-contents)
+               (%make-utf8-string length data))))
         (t (%make-utf8-string length))))
 
 ;; adjust-sequence
@@ -410,7 +435,54 @@
     (fill-vec-with-char data item
                         start-byte (+ start-byte new-area-len)))
   sequence)
-;;; (n)substitute, replace will be fucky
+;;; (n)substitute will be fucky
+
+(defmethod sequence:replace
+    ((s1 utf8-string) (s2 sequence)
+     &key (start1 0) end1 (start2 0) end2)
+  (when (null end1) (setf end1 (length s1)))
+  (when (null end2) (setf end2 (length s2)))
+  (let* ((data (utf8-string-data s1))
+         (start-byte (char-index data start1))
+         (end-byte (char-index data end1))
+         ;; How many bytes do we need for these characters?
+         (required-area-len (reduce #'+ s2
+                                    :start start2 :end end2
+                                    :key #'char-length)))
+    (unless (= required-area-len (- end-byte start-byte))
+      ;; Resize the data if necessary
+      (setf data
+            (expand-data data start-byte required-area-len
+                         end-byte (length data))
+            (utf8-string-data s1) data))
+    ;; Actually replace
+    (replace-vec-with-charv data s2 start2
+                            start-byte
+                            (+ start-byte required-area-len)))
+  s1)
+;;; When s2 is another utf8-string, we can work with bytes
+;;; directly and skip encoding/decoding.
+(defmethod sequence:replace
+    ((s1 utf8-string) (s2 utf8-string)
+     &key (start1 0) end1 (start2 0) end2)
+  (when (null end1) (setf end1 (length s1)))
+  (when (null end2) (setf end2 (length s2)))
+  (let* ((data1 (utf8-string-data s1))
+         (start-byte1 (char-index data1 start1))
+         (end-byte1 (char-index data1 end1))
+         (data2 (utf8-string-data s2))
+         (start-byte2 (char-index data2 start2))
+         (end-byte2 (char-index data2 end2))
+         (new-len (- end-byte2 start-byte2)))
+    (unless (= new-len (- end-byte1 start-byte1))
+      (setf data1
+            (expand-data data1 start-byte1 new-len
+                         end-byte1 (length data1))
+            (utf8-string-data s1) data1))
+    (replace-vec-with-vec data1 data2 start-byte2
+                          start-byte1
+                          (+ start-byte1 new-len)))
+  s1)
 
 ;;; the default reverse = nreverse copy-seq is fine
 
