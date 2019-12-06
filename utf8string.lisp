@@ -433,8 +433,11 @@
 (defmacro iterator-char-index (it) `(car ,it))
 (defmacro iterator-byte-index (it) `(cdr ,it))
 
+(deftype iterator () '(cons index index))
+
 (defun stri-prev (sequence iterator from-end)
-  (declare (ignore from-end))
+  (declare (ignore from-end)
+           (type iterator iterator))
   (let ((data (utf8-string-data sequence)))
     (setf (iterator-char-index iterator)
           (1- (iterator-char-index iterator))
@@ -443,7 +446,8 @@
   iterator)
 
 (defun stri-next (sequence iterator from-end)
-  (declare (ignore from-end))
+  (declare (ignore from-end)
+           (type iterator iterator))
   (let ((data (utf8-string-data sequence)))
     (setf (iterator-char-index iterator)
           (1+ (iterator-char-index iterator))
@@ -452,22 +456,27 @@
   iterator)
 
 (defun stri-endp (sequence iterator limit from-end)
-  (declare (ignore sequence from-end))
+  (declare (ignore sequence from-end)
+           (type iterator iterator) (type index limit))
   (= (iterator-char-index iterator) limit))
 
 (defun stri-elt (sequence iterator)
+  (declare (type iterator iterator))
   (get-char (utf8-string-data sequence)
             (iterator-byte-index iterator)))
 
 (defun (setf stri-elt) (new sequence iterator)
+  (declare (type iterator iterator))
   (set-data-char new sequence (iterator-byte-index iterator)))
 
 (defun stri-index (sequence iterator)
-  (declare (ignore sequence))
+  (declare (ignore sequence)
+           (type iterator iterator))
   (iterator-char-index iterator))
 
 (defun stri-copy (sequence iterator)
-  (declare (ignore sequence))
+  (declare (ignore sequence)
+           (type iterator iterator))
   (cons (iterator-char-index iterator)
         (iterator-byte-index iterator)))
 
@@ -499,6 +508,8 @@
 ;;; programmer: iteration has to go through make-sequence-iterator
 ;;; and use those functions. However, on SBCL, it looks like some
 ;;; things do assume the iterator-foo work, such as MAP-INTO.
+;;; (e.g. try leaving these out, and then use a utf8-string as
+;;;  the map-into result)
 
 (defmethod sequence:iterator-step ((sequence utf8-string) iterator from-end)
   (if from-end
