@@ -333,9 +333,10 @@
                                '(unsigned-byte 8))))
         (replace-vec-with-charv data initial-contents))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
 ;;; Extensible sequences protocol
+;;; Core first
 ;;;
 
 (defmethod sequence:elt ((sequence utf8-string) index)
@@ -421,62 +422,100 @@
   (setf (utf8-string-length sequence) length)
   sequence)
 
-;;; make-sequence-iterator uses default implementation
-;;; (i.e., make-simple-sequence-iterator)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Iteration protocol
+;;;
 
 ;;; Iterators are a cons of the character index with the
 ;;; byte index. Both are necessary due to possible resizing.
 ;;; The endpoint is just the character index.
 (defmacro iterator-char-index (it) `(car ,it))
 (defmacro iterator-byte-index (it) `(cdr ,it))
-(defmethod sequence:make-simple-sequence-iterator
-    ((sequence utf8-string) &key from-end (start 0) end)
+
+(defun stri-prev (sequence iterator from-end)
+  (declare (ignore from-end))
+  (let ((data (utf8-string-data sequence)))
+    (setf (iterator-char-index iterator)
+          (1- (iterator-char-index iterator))
+          (iterator-byte-index iterator)
+          (prev-index data (iterator-byte-index iterator))))
+  iterator)
+
+(defun stri-next (sequence iterator from-end)
+  (declare (ignore from-end))
+  (let ((data (utf8-string-data sequence)))
+    (setf (iterator-char-index iterator)
+          (1+ (iterator-char-index iterator))
+          (iterator-byte-index iterator)
+          (next-index data (iterator-byte-index iterator))))
+  iterator)
+
+(defun stri-endp (sequence iterator limit from-end)
+  (declare (ignore sequence from-end))
+  (= (iterator-char-index iterator) limit))
+
+(defun stri-elt (sequence iterator)
+  (get-char (utf8-string-data sequence)
+            (iterator-byte-index iterator)))
+
+(defun (setf stri-elt) (new sequence iterator)
+  (set-data-char new sequence (iterator-byte-index iterator)))
+
+(defun stri-index (sequence iterator)
+  (declare (ignore sequence))
+  (iterator-char-index iterator))
+
+(defun stri-copy (sequence iterator)
+  (declare (ignore sequence))
+  (cons (iterator-char-index iterator)
+        (iterator-byte-index iterator)))
+
+(defun stri-simple-iterator (sequence from-end start end)
   (when (null end) (setf end (length sequence)))
   (let ((data (utf8-string-data sequence)))
     (if from-end
         ;; FIXME: Probably broken at the edges
         (values (cons (1- end) (char-index data (1- end)))
-                (1- start)
-                t)
+                (1- start) t)
         (values (cons start (char-index data start))
-                end
-                nil))))
+                end nil))))
 
-(defmethod sequence:iterator-step
-    ((sequence utf8-string) iterator from-end)
-  (let ((data (utf8-string-data sequence)))
-    (if from-end
-        (setf (iterator-char-index iterator)
-              (1- (iterator-char-index iterator))
-              (iterator-byte-index iterator)
-              (prev-index data (iterator-byte-index iterator)))
-        (setf (iterator-char-index iterator)
-              (1+ (iterator-char-index iterator))
-              (iterator-byte-index iterator)
-              (next-index data (iterator-byte-index iterator)))))
-  iterator)
+(defmethod sequence:make-simple-sequence-iterator
+    ((sequence utf8-string) &key from-end (start 0) end)
+  (stri-simple-iterator sequence from-end start end))
 
+(defmethod sequence:make-sequence-iterator
+    ((sequence utf8-string) &key from-end (start 0) end)
+  (multiple-value-bind (it limit fe)
+      (stri-simple-iterator sequence from-end start end)
+    (values it limit fe
+            (if from-end #'stri-prev #'stri-next)
+            #'stri-endp #'stri-elt #'(setf stri-elt)
+            #'stri-index #'stri-copy)))
+
+;;; So as far as I can tell from the extensible sequences
+;;; paper, iterator-foo are entirely optional for the sequence
+;;; programmer: iteration has to go through make-sequence-iterator
+;;; and use those functions. However, on SBCL, it looks like some
+;;; things do assume the iterator-foo work, such as MAP-INTO.
+
+(defmethod sequence:iterator-step ((sequence utf8-string) iterator from-end)
+  (if from-end
+      (stri-prev sequence iterator from-end)
+      (stri-next sequence iterator from-end)))
 (defmethod sequence:iterator-endp
     ((sequence utf8-string) iterator limit from-end)
-  (declare (ignore from-end))
-  (= (iterator-char-index iterator) limit))
-
-(defmethod sequence:iterator-element
-    ((sequence utf8-string) iterator)
-  (get-char (utf8-string-data sequence)
-            (iterator-byte-index iterator)))
-
-;;; Also hella slow.
+  (stri-endp sequence iterator limit from-end))
+(defmethod sequence:iterator-element ((sequence utf8-string) iterator)
+  (stri-elt sequence iterator))
 (defmethod (setf sequence:iterator-element)
     (new (sequence utf8-string) iterator)
-  (set-data-char new sequence (iterator-byte-index iterator)))
-
+  (setf (stri-elt sequence iterator) new))
 (defmethod sequence:iterator-index ((sequence utf8-string) iterator)
-  (iterator-char-index iterator))
-
+  (stri-index sequence iterator))
 (defmethod sequence:iterator-copy ((sequence utf8-string) iterator)
-  (cons (iterator-char-index iterator)
-        (iterator-byte-index iterator)))
+  (stri-copy sequence iterator))
 
 ;;; map, count, find, position are probably fine
 ;;; however, MAP /could/ allocate four bytes per character
