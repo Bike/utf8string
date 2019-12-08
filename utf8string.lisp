@@ -33,6 +33,13 @@
        (serious-condition () "<invalid>"))
      stream)))
 
+(defmethod make-load-form ((str utf8-string) &optional env)
+  (declare (ignore env))
+  ;; Don't need to initialize separately since there's no recursion.
+  `(make-instance 'utf8-string
+     :data ',(utf8-string-data str)
+     :length ',(utf8-string-length str)))
+
 ;;; NOTE: Several places make arrays initialized to zero
 ;;; even when this is not obviously necessary; however
 ;;; explicit initialization ensures that the array is a valid
